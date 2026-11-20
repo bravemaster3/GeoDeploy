@@ -551,10 +551,73 @@ def _containerised_proxies(client) -> list[dict]:
                     mounts.append({"host": m.get("Source"), "container": dest,
                                    "rw": bool(m.get("RW"))})
             out.append({"kind": kind, "name": c.name, "image": image,
-                        "ports": sorted(set(ports)), "mounts": mounts})
+                        "ports": sorted(set(ports)), "mounts": mounts,
+                        # Named in the instructions, so making the network join permanent is an
+                        # edit to a file the operator can find rather than a hunt.
+                        "service": labels.get("com.docker.compose.service"),
+                        "compose_files": labels.get("com.docker.compose.project.config_files")})
     except Exception:
         return out
     return out
+
+
+# What a proxy in a container must name to reach us when nothing could be asked: the compose
+# project is `geodeploy` and the network is declared with `name: geodeploy` in docker-compose.yml.
+_OURS_FALLBACK = {"name": "geodeploy-nginx-1", "network": "geodeploy"}
+
+
+def _our_ingress(client) -> dict:
+    """GeoDeploy's own nginx container and the network it is on, read from Docker rather than
+    assumed — the container name follows the compose project name, which an install can change."""
+    try:
+        me = client.containers.get(os.uname().nodename)
+        project = (me.labels or {}).get("com.docker.compose.project")
+        if not project:
+            return dict(_OURS_FALLBACK)
+        for c in client.containers.list(filters={"label": [f"com.docker.compose.project={project}",
+                                                           "com.docker.compose.service=nginx"]}):
+            networks = list(((c.attrs.get("NetworkSettings") or {}).get("Networks") or {}).keys())
+            network = "geodeploy" if "geodeploy" in networks else (networks[0] if networks else "geodeploy")
+            return {"name": c.name, "network": network}
+    except Exception:
+        pass
+    return dict(_OURS_FALLBACK)
+
+
+def container_route(proxy: dict, ours: dict | None = None) -> dict:
+    """How a proxy running in a container reaches GeoDeploy, for `deployment.proxy_config` (#162).
+
+    The config file is the HOST side of its mount — a drop-in directory or a single file such as a
+    Caddyfile — because that is the file that survives the container being recreated.
+    """
+    ours = ours or dict(_OURS_FALLBACK)
+    mounts = [m for m in proxy.get("mounts") or [] if m.get("host") and m.get("container")]
+    # A drop-in directory first — a new file there edits nothing of theirs — then the main file
+    # (a Caddyfile, an nginx.conf). A mounted directory of any other shape names no file to edit.
+    dropin = next((m for m in mounts if m["container"].rstrip("/").endswith("conf.d")), None)
+    single = next((m for m in mounts
+                   if m["container"].lower().endswith(("caddyfile", ".conf"))), None)
+    chosen, is_dir = (dropin, True) if dropin else (single, False)
+    return {"proxy": proxy["name"], "kind": proxy["kind"], "service": proxy.get("service"),
+            "compose_files": proxy.get("compose_files"),
+            "config_host": chosen["host"] if chosen else None,
+            "config_container": chosen["container"] if chosen else None,
+            "config_is_dir": is_dir,
+            "upstream_host": ours["name"], "network": ours["network"]}
+
+
+def container_ingress() -> dict | None:
+    """The proxy container that serves this machine's 80/443, as a route — or None (no Docker, no
+    such container, or Traefik, whose instructions are their own). Cheap: one Docker API listing,
+    no helper container — the manual configuration endpoint calls it on every tab switch."""
+    try:
+        client = _client()
+        proxies = _containerised_proxies(client)
+        if not proxies or any(p["kind"] == "traefik" for p in proxies):
+            return None
+        return container_route(proxies[0], _our_ingress(client))
+    except Exception:
+        return None
 
 
 # ── Adapters: where the file goes, how it is tested, how it is reloaded ──────────────────────────
@@ -684,6 +747,8 @@ def detect() -> dict:
     try:
         client = _client()
         out["containers"] = _containerised_proxies(client)
+        if out["containers"]:
+            out["ours"] = _our_ingress(client)
     except ProxyError as exc:
         out["error"] = str(exc)
         return out
@@ -790,6 +855,10 @@ def _body(adapter: dict, domain: str, intent: dict, has_cert: bool = False,
     """
     from . import deployment
 
+    # A container proxy is refused (see plan), so this text is only ever shown, never written —
+    # and shown, it must be the version that works from inside a container (#162).
+    route = adapter.get("route") if adapter.get("where") == "container" else None
+
     # WITH A CERTIFICATE, APPLY MUST WRITE THE HTTPS SHAPE. Rendering the plain port-80 block here
     # would overwrite a working HTTPS vhost with an HTTP-only one — and behind Cloudflare on Full
     # (strict), where Cloudflare connects to 443, that is not a downgrade but an outage: no block
@@ -797,7 +866,8 @@ def _body(adapter: dict, domain: str, intent: dict, has_cert: bool = False,
     # "Apply again" and removal-then-reapply is the natural recovery path, so this is a button
     # press away, not a corner case.
     cfg = deployment.proxy_config(domain, adapter["kind"], intent,
-                                  tls=has_cert and adapter["kind"] == "nginx", redirect=redirect)
+                                  tls=has_cert and adapter["kind"] == "nginx", redirect=redirect,
+                                  container=route)
     body = cfg["config"]
     # Drop the generator's LEADING comment block — "put this in /etc/nginx/sites-available/… then
     # run nginx -t && systemctl reload". Right for someone copying the text by hand, nonsense in a
@@ -829,6 +899,18 @@ def plan(domain: str, intent: dict) -> dict:
     adapter = found.get("adapter")
     blockers: list[dict] = []
     warnings: list[str] = []
+    # The proxy container in front of us, if that is what serves 80/443 — with or without a config
+    # mount we could add a file to. Traefik keeps its own refusal and its own instructions.
+    containers = found.get("containers") or []
+    ingress = None
+    if not any(p["kind"] == "traefik" for p in containers):
+        if adapter and adapter.get("where") == "container":
+            ingress = next((p for p in containers if p["name"] == adapter["container"]), None)
+        elif adapter is None and containers:
+            ingress = containers[0]
+    route = container_route(ingress, found.get("ours")) if ingress else None
+    if adapter and route:
+        adapter = {**adapter, "route": route}
 
     if not found["probe_ok"]:
         blockers.append({
@@ -850,6 +932,12 @@ def plan(domain: str, intent: dict) -> dict:
                 "fix": "Use the Traefik instructions below: one `docker network connect`, and labels "
                        "on GeoDeploy's own nginx service.",
             })
+        elif route:
+            # A proxy container with no drop-in we could add to — a single mounted Caddyfile is the
+            # usual shape. It used to fall through to the generic refusal below, which talked about
+            # an installed proxy and its main configuration file, over a configuration pointing at
+            # 127.0.0.1 that cannot work from inside a container (#162).
+            blockers.append(_container_blocker(route))
         elif not intent["bind"].startswith("127."):
             # DEDICATED MODE. There is no proxy here because GeoDeploy IS the web server, so
             # "no reverse proxy found" would be true and useless — it reads as a missing
@@ -901,22 +989,8 @@ def plan(domain: str, intent: dict) -> dict:
         # Making it work needs GeoDeploy's network joined to THEIR container, which changes a
         # container we did not create and is undone by their next `docker compose up`. That is the
         # operator's call, so it gets exact steps instead of a button.
-        blockers.append({
-            "code": "container-proxy",
-            "title": f"This machine's web server runs in a container ('{adapter['container']}')",
-            "detail": (
-                "From inside a container, 127.0.0.1 is the container itself — so a site pointing at "
-                "GeoDeploy's local port would answer every visitor with an error. Reaching GeoDeploy "
-                "means connecting that container to GeoDeploy's Docker network, which changes a "
-                "container GeoDeploy did not create, so it will not do that by itself."
-            ),
-            "fix": (
-                f"Run  docker network connect geodeploy {adapter['container']}  and use the "
-                f"configuration below with  proxy_pass http://nginx:80;  (Caddy: "
-                f"reverse_proxy nginx:80) in place of the 127.0.0.1 address. Add the network to "
-                f"that container's compose file too, or the next recreate drops it."
-            ),
-        })
+        blockers.append(_container_blocker(route or container_route(
+            {"name": adapter["container"], "kind": adapter["kind"]}, found.get("ours"))))
     elif adapter:
         kind = adapter["kind"]
         # A proxy that is installed but serves nothing. Writing to it "works": the file passes the
@@ -1061,6 +1135,8 @@ def plan(domain: str, intent: dict) -> dict:
         "domain": domain,
         "can_apply": bool(adapter) and not blockers,
         "adapter": adapter,
+        # The proxy container in front, so the panel opens the manual configuration on its kind.
+        "ingress": {"kind": route["kind"], "container": route["proxy"]} if route else None,
         "applied": applied,
         "blockers": blockers,
         "warnings": warnings,
@@ -1092,6 +1168,36 @@ def plan(domain: str, intent: dict) -> dict:
         out["has_certificate"] = has_cert
         out["config"] = _body(adapter, domain, intent, has_cert=has_cert, redirect=redirect)
     return out
+
+
+def _container_blocker(route: dict) -> dict:
+    """The refusal for a proxy in a container — one text whatever its mounts, naming the exact join.
+
+    Its fix points at the configuration below AS IT IS: the manual configuration for this machine is
+    generated for the container (`deployment.proxy_config(container=…)`), so there is no address to
+    swap by hand any more.
+    """
+    name, network = route["proxy"], route["network"]
+    where = ""
+    if route.get("config_host"):
+        where = (f" Its configuration is mounted from {route['config_host']} on this machine — that "
+                 f"is the file to edit, so the change survives the container being recreated.")
+    return {
+        "code": "container-proxy",
+        "title": f"This machine's web server runs in a container ('{name}')",
+        "detail": (
+            "From inside a container, 127.0.0.1 is the container itself — so a site pointing at "
+            "GeoDeploy's local port would answer every visitor with an error. Reaching GeoDeploy "
+            "means connecting that container to GeoDeploy's Docker network, which changes a "
+            "container GeoDeploy did not create, so it will not do that by itself." + where
+        ),
+        "fix": (
+            f"Run  docker network connect {network} {name}  and use the {route['kind']} "
+            f"configuration below as it is — it already reaches GeoDeploy at "
+            f"http://{route['upstream_host']}:80 over that network. Add the network to that "
+            f"container's compose file too, or the next recreate drops it."
+        ),
+    }
 
 
 def _no_adapter_detail(found: dict) -> str:

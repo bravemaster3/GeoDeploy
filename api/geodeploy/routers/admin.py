@@ -1269,7 +1269,16 @@ async def deployment_proxy_config(domain: str = "", flavor: str = "nginx",
     domain = (domain or "").strip().lower()
     if domain:
         domain = _valid_domain(domain)
-    return deployment.proxy_config(domain, flavor, deployment.read_intent())
+    # A proxy of this kind running in a CONTAINER cannot reach 127.0.0.1 — that is itself — so its
+    # configuration is written for the container (#162). Any other machine: unchanged.
+    container = None
+    if flavor != "traefik":
+        from ..services import hostproxy
+
+        route = await run_in_threadpool(hostproxy.container_ingress)
+        if route and route["kind"] == flavor:
+            container = route
+    return deployment.proxy_config(domain, flavor, deployment.read_intent(), container=container)
 
 
 @router.post("/deployment/check-dns")

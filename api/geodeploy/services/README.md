@@ -647,7 +647,19 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   wrote `proxy_pass http://127.0.0.1:<port>` into it (the container's own loopback — 502 for every
   visitor, while Apply said success), overwrote a `geodeploy.conf` it could not see was foreign, and
   turned a neighbour's site for the same name into a 502. `_container_adapter` still classifies, so
-  the refusal names the container; `_apply_in_container` was deleted. Same round added the
+  the refusal names the container; `_apply_in_container` was deleted. **2026-11-20 (#162):** a proxy
+  container WITHOUT a usable drop-in (a single mounted Caddyfile) skipped that branch and got the
+  generic `no-adapter` text ("a proxy is installed here … main configuration") over a manual config
+  that still said `127.0.0.1`. Now every non-Traefik proxy container holding 80/443 gets
+  `container-proxy` (`_container_blocker`, placed before `dedicated`), and its configuration is
+  written for it: `container_route()` (host side of its mount — drop-in dir first, else the single
+  file — plus its compose service/file) and `_our_ingress()` (our nginx container and network, read
+  from Docker; fallback `geodeploy-nginx-1` / `geodeploy`) feed `deployment.proxy_config(container=…)`,
+  which proxies to `http://<our nginx container>:80` with `docker exec` test/reload. The container
+  NAME, not the service name `nginx`, because a proxy whose own project has an `nginx` service would
+  resolve that to itself. GeoDeploy still never joins the network itself. `container_ingress()` is
+  the cheap Docker-only lookup the manual endpoint uses; `plan()['ingress']` tells the panel which
+  tab to open. Without a route, `proxy_config` output is byte-identical (128-case snapshot). Same round added the
   `not-serving` (installed, nothing listening) and `apache-modules` refusals, widened R5's name
   collection (one-line nginx blocks, every `ServerAlias` name, Caddy via `caddy adapt`), and fixed the
   listener parse (`$NF` was `p` for busybox's `nginx: master p`).
@@ -720,6 +732,7 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   301 there loops between Cloudflare and the origin forever.
 
 ## Last updated
+2026-11-20 (`hostproxy.py` + `deployment.py`: a reverse proxy in a container — any mount shape — gets the `container-proxy` refusal and a configuration written for the container (our nginx by container name over the `geodeploy` network, its mounted file, `docker exec` test/reload). Host paths byte-identical. #162.)
 2026-11-19d (`internal_columns.py`: `__gd_*` columns — QGIS-computed geometry measures — kept in the PostGIS table for Martin, stripped from ingest column lists, exports, OGC API Features and interop GeoJSON, never written to GeoParquet. #133.)
 2026-11-19c (`symbology.ground_width` — map-unit widths as an exponential-2 zoom interpolation at the layer's middle latitude (`line_width_m`, `outline_width_m`); `outline_opacity` / `outline_width_m` force the outline line layer; all gated on plugin-only keys so editor-made portals are byte-identical. #118.)
 2026-11-19 (port-80-held refusal; manual config for a port-80 instance targets 8080; dedicated CDN verdict)

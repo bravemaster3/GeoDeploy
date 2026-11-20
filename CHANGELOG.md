@@ -6,6 +6,32 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.7.2 — 2026-11-20
+
+**A web server that runs in a container now gets instructions that work** (#162). On a machine
+where another app's Caddy, nginx or Apache runs in Docker and holds ports 80 and 443, Settings →
+Deployment showed two problems:
+
+- **The configuration it offered could not work.** It sent traffic to `127.0.0.1`. Inside a
+  container that address is the container itself, so following the steps to the letter answered
+  every visitor with an error.
+- **The message described a different machine.** When the container's configuration was a single
+  file, such as one `Caddyfile`, it said *"a proxy is installed here"* and talked about drop-in
+  directories.
+
+Now the panel names the container and opens the manual route on that proxy's own tab. The
+configuration there is written for the container:
+
+- It reaches GeoDeploy's nginx container by name over the `geodeploy` network.
+- It names the file to edit on the host, where that file is mounted from.
+- Its test and reload commands run through `docker exec`.
+- It shows the `docker network connect` step, and the Compose lines that keep the connection after
+  the container is recreated.
+
+GeoDeploy still never edits or connects a container it did not create; that stays your call.
+Nothing changes for a web server installed on the machine itself, for Traefik, or when GeoDeploy is
+the machine's only web server.
+
 ## v1.7.1 — 2026-11-20
 
 **Fresh installs could not finish setup.** On the wizard's last step, *Create admin account*,

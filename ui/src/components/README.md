@@ -252,6 +252,7 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-11-20 (DeploymentPanel: when the host plan reports a proxy CONTAINER in front (`plan.ingress`), the manual route opens on that proxy's tab — the one whose configuration is written for the container. #162.)
 2026-10-11 (PasswordField: reveal toggle everywhere, and a confirm field in setup)
 2026-10-09 (DeploymentPanel: two routes — GeoDeploy configures the host proxy, or you do)
 2026-08-31 (`portal/DashboardBuilder.vue`: a **Fill the screen** checkbox in the board-wide
