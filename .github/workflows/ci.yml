@@ -411,4 +411,4 @@ jobs:
 
       - name: Unit tests (node --test, no extra dependencies)
         working-directory: ui
-        run: node --test tests/mapStyle.test.mjs tests/identify.test.mjs
+        run: node --test tests/mapStyle.test.mjs tests/identify.test.mjs tests/apiError.test.mjs tests/refs.test.mjs

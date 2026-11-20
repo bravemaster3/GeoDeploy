@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { detailText } from '@/lib/apiError'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -11,6 +12,9 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (r) => r,
   (err) => {
+    // A validation error's detail is a list; every screen expects a sentence (see lib/apiError).
+    const data = err.response?.data
+    if (data && Array.isArray(data.detail)) data.detail = detailText(data.detail)
     if (err.response?.status === 401 && window.location.pathname !== '/login') {
       localStorage.removeItem('geodeploy_token')
       window.location.href = '/login'

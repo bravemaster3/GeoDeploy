@@ -332,10 +332,17 @@ async function next() {
       await configureStorage(storage)
       step.value++
     } else {
-      // Checked here as well as in the button's disabled state: the Enter key, a restored form and
-      // a programmatic submit all reach this line without passing the button.
-      if (admin.password !== adminPassword2) {
+      // The button stays enabled, so this is the check that counts, and it says what is wrong rather
+      // than leaving a dead button. `.value`: in script code a ref is NOT unwrapped — comparing the
+      // ref object itself is always "different", which blocked every fresh install of v1.7 (#160).
+      if (admin.password !== adminPassword2.value) {
         error.value = 'The two passwords are different.'
+        return
+      }
+      // `minlength` on the field does nothing here — nothing submits a form — and the server's
+      // refusal names a schema field, so say it in the words the form uses.
+      if (admin.password.length < 8) {
+        error.value = 'The password must be at least 8 characters.'
         return
       }
       await createAdmin(admin)

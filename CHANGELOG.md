@@ -6,6 +6,27 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.7.1 — 2026-11-20
+
+**Fresh installs could not finish setup.** On the wizard's last step, *Create admin account*,
+**Complete setup** answered "The two passwords are different." however carefully they were typed, so
+no new instance of v1.7 could create its first account (#160). It did not depend on the port chosen
+during install. An instance that was already set up, whether updated to v1.7 or not, was never
+affected, because that step only runs when no admin exists. The check compared the password with
+the confirmation field's *container* rather than with what was typed in it.
+
+- **The wizard now checks the password's length itself.** The "Minimum 8 characters" rule was
+  only enforced by the server, so a short password got past the form.
+- **Validation errors read as sentences everywhere.** When the server refuses a form field — a
+  password too short, an email it cannot read — the message used to appear as raw JSON in the
+  red box, on every screen. It now names the field and says what is wrong:
+  `password: String should have at least 8 characters`.
+- **Caught before it ships, from now on.** A new UI test, run in CI, reads every component with
+  Vue's own compiler and fails on this whole class of mistake: a reactive value tested or
+  compared without reading it. It finds the v1.7 line, and nothing else in the UI.
+- The dashboard's `package.json` carries the product version again (it said 1.5.4), and a test now
+  keeps it in step.
+
 ## v1.7 — 2026-11-19
 
 The headlines, in more detail below:

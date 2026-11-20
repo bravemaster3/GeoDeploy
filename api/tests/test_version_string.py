@@ -46,3 +46,18 @@ def test_the_changelog_heading_is_the_one_being_read():
     assert "## Unreleased" in text, "the Unreleased heading is what the version regex must skip"
     assert HEADING.search(text).start() > text.index("## Unreleased"), (
         "the newest version heading should sit below `## Unreleased`")
+
+
+def test_the_dashboard_package_carries_the_released_version():
+    """`ui/package.json` is the product version too (ui/README.md, "Version") and had drifted twice:
+    1.4.1 through v1.5, then 1.5.4 through v1.7. A changelog version is `1.7` or `1.7.1`; npm
+    insists on three parts, so `1.7` is written `1.7.0`."""
+    import json
+
+    expected = released_version()
+    if expected.count(".") == 1:
+        expected += ".0"
+    package = json.loads((REPO / "ui" / "package.json").read_text(encoding="utf-8"))
+    assert package["version"] == expected, (
+        "ui/package.json says {0} but the newest release in CHANGELOG.md is {1} — bump it with "
+        "`version=` in api/geodeploy/main.py".format(package["version"], expected))
