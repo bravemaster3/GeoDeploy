@@ -37,6 +37,15 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
 - **Copy to clipboard goes through `src/lib/clipboard.js::copyText`.** `navigator.clipboard` exists
   only over https, and a fresh instance is on `http://<ip>` while its domain is set up — a bare
   `writeText` silently did nothing there (2026-11-19). Never call it directly.
+- **A ref in `<script setup>` code needs `.value`** — only the template unwraps it. Compared bare,
+  it is an object: always truthy, never equal to a string. That shipped in v1.7 as a wizard that
+  called every pair of passwords "different" (#160). `tests/refs.test.mjs` (CI) now walks every
+  component with `vue/compiler-sfc`, which knows which names are refs, and fails on a bare ref in a
+  comparison, a `!`, an `&&`/`||` left side or an `if`/`?:` test (a parameter of the same name is
+  not flagged).
+- **API errors reach the screens as text.** FastAPI's 422 carries `detail` as a list; the client's
+  response interceptor (`src/api/index.js`) turns it into one sentence with
+  `src/lib/apiError.js::detailText`, so the ~78 `err.response?.data?.detail` sites need no change.
 - `vite.config.js` dev proxy must stay aligned with `nginx/nginx.conf` (prefix stripping + titiler port 80).
 
 ## Version
@@ -54,6 +63,7 @@ Two other versions are deliberately NOT in step and must not be swept up by a pr
   repository, on its own cadence.
 
 ## Last updated
+2026-11-20 (v1.7.1, #160: `SetupWizard.vue` compared the confirmation ref without `.value`; new `lib/apiError.js` + interceptor; `tests/refs.test.mjs` + `tests/apiError.test.mjs` in CI; `package.json` back to the product version, pinned by `api/tests/test_version_string.py`.)
 2026-11-19c (`lib/symbology.js`: `groundWidth` / `outlineOpacity` twins and `line_opacity` + ground-width keys in `CLASS_SHAPE_KEYS` (it had drifted from the server's; `api/tests/test_qgis_fidelity_118.py` now pins the two lists equal). `lib/mapStyle.js` mirrors the portal's outline layer and ground widths. #118.)
 2026-11-19 (`src/lib/clipboard.js`: every Copy button works on plain http.)
 2026-08-31 (`package.json` brought in line with the product at 1.5.1, and a note above on which
