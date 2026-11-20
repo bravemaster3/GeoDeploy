@@ -1,13 +1,16 @@
 <template>
   <div class="px-4 py-3 hover:bg-muted/60 group">
-    <div class="flex items-center gap-4">
+    <!-- WRAPS on a phone: avatar + identity on the first line, the role select and the actions on
+         the next, under the name. In one line the select and the (invisible but present) action
+         buttons left the identity no width at all, and the role badge ran over the select. -->
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
       <!-- Avatar -->
       <div class="w-9 h-9 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold flex-shrink-0">
         {{ initials }}
       </div>
 
       <!-- Identity -->
-      <div class="flex-1 min-w-0">
+      <div class="flex-1 min-w-[10rem]">
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-sm font-medium text-foreground truncate">{{ user.name }}</span>
           <span v-if="isSelf" class="text-[10px] text-muted-foreground/70">({{ $t('users.you') }})</span>
@@ -21,28 +24,34 @@
         </div>
       </div>
 
-      <!-- Role select (not for the owner row, not for yourself) -->
-      <select v-if="canChangeRole" :value="user.role" @change="onRole($event.target.value)"
-        class="input text-xs py-1 px-2 w-24 flex-shrink-0">
-        <option value="viewer">{{ $t('users.role_viewer') }}</option>
-        <option value="editor">{{ $t('users.role_editor') }}</option>
-        <option value="admin">{{ $t('users.role_admin') }}</option>
-      </select>
+      <!-- The controls: their own line under the name on a small screen (basis-full), inline from
+           `sm` up. One group, so the break is decided once rather than by whatever happens to fit. -->
+      <div class="flex items-center gap-2 basis-full sm:basis-auto pl-[3.25rem] sm:pl-0">
+        <!-- Role select (not for the owner row, not for yourself) -->
+        <select v-if="canChangeRole" :value="user.role" @change="onRole($event.target.value)"
+          class="input text-xs py-1 px-2 w-24 flex-shrink-0">
+          <option value="viewer">{{ $t('users.role_viewer') }}</option>
+          <option value="editor">{{ $t('users.role_editor') }}</option>
+          <option value="admin">{{ $t('users.role_admin') }}</option>
+        </select>
 
-      <!-- Hover actions -->
-      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-        <button v-if="canReset" @click="onResetLink" :title="$t('users.reset_password')"
-          class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted">
-          <KeyIcon class="w-3.5 h-3.5" />
-        </button>
-        <button v-if="canTransfer" @click="confirmTransfer = true" :title="$t('users.transfer')"
-          class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-amber-400 hover:bg-muted">
-          <UsersIcon class="w-3.5 h-3.5" />
-        </button>
-        <button v-if="canDelete" @click="confirmDelete = true" :title="$t('users.delete')"
-          class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-red-400 hover:bg-muted">
-          <TrashIcon class="w-3.5 h-3.5" />
-        </button>
+        <!-- Hover actions -->
+        <!-- Always shown on a small screen: a phone has no hover, so hover-only actions are actions a
+             phone cannot reach. -->
+        <div class="flex items-center gap-1 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0">
+          <button v-if="canReset" @click="onResetLink" :title="$t('users.reset_password')"
+            class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted">
+            <KeyIcon class="w-3.5 h-3.5" />
+          </button>
+          <button v-if="canTransfer" @click="confirmTransfer = true" :title="$t('users.transfer')"
+            class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-amber-400 hover:bg-muted">
+            <UsersIcon class="w-3.5 h-3.5" />
+          </button>
+          <button v-if="canDelete" @click="confirmDelete = true" :title="$t('users.delete')"
+            class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-red-400 hover:bg-muted">
+            <TrashIcon class="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
     </div>
 

@@ -46,7 +46,7 @@
           <span class="w-9 h-9 rounded-lg bg-blue-500/15 text-blue-400 flex items-center justify-center flex-shrink-0">
             <DatabaseIcon class="w-5 h-5" />
           </span>
-          <div class="flex-1 min-w-0">
+          <div class="flex-1 min-w-[9rem]">
             <h2 class="text-sm font-semibold text-foreground">Vector layers</h2>
             <!-- Was "Stored in PostGIS · served as vector tiles", which stopped being true once
                  GeoParquet layers arrived: those are files in object storage, read directly or via
@@ -56,7 +56,7 @@
           </div>
           <input v-if="dataStore.vectorLayers.length > 3" v-model="vectorSearch" type="search"
             id="vector-search" name="vector-search" placeholder="Search…"
-            class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+            class="order-last w-full sm:order-none sm:w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <!-- SELECT ALL, meaning everything the FILTER currently shows — not the page. The
                page is a display detail; what you searched for is what you meant. -->
           <label v-if="auth.canEdit && filteredVectors.length" class="flex items-center gap-1.5 cursor-pointer"
@@ -119,13 +119,13 @@
           <span class="w-9 h-9 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center flex-shrink-0">
             <ImageIcon class="w-5 h-5" />
           </span>
-          <div class="flex-1 min-w-0">
+          <div class="flex-1 min-w-[9rem]">
             <h2 class="text-sm font-semibold text-foreground">Raster files</h2>
             <p class="text-xs text-muted-foreground/70">Cloud-optimised GeoTIFFs in object storage</p>
           </div>
           <input v-if="dataStore.rasterLayers.length > 3" v-model="rasterSearch" type="search"
             id="raster-search" name="raster-search" placeholder="Search…"
-            class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+            class="order-last w-full sm:order-none sm:w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <!-- SELECT ALL, meaning everything the FILTER currently shows — not the page. The
                page is a display detail; what you searched for is what you meant. -->
           <label v-if="auth.canEdit && filteredRasters.length" class="flex items-center gap-1.5 cursor-pointer"
@@ -188,13 +188,13 @@
           <span class="w-9 h-9 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center flex-shrink-0">
             <LinkIcon class="w-5 h-5" />
           </span>
-          <div class="flex-1 min-w-0">
+          <div class="flex-1 min-w-[9rem]">
             <h2 class="text-sm font-semibold text-foreground">External sources</h2>
             <p class="text-xs text-muted-foreground/70">WMS · XYZ · WFS — shown in portals without importing</p>
           </div>
           <input v-if="dataStore.externalSources.length > 3" v-model="sourceSearch" type="search"
             id="source-search" name="source-search" placeholder="Search…"
-            class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+            class="order-last w-full sm:order-none sm:w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <!-- SELECT ALL, meaning everything the FILTER currently shows — not the page. The
                page is a display detail; what you searched for is what you meant. -->
           <label v-if="auth.canEdit && filteredSources.length" class="flex items-center gap-1.5 cursor-pointer"

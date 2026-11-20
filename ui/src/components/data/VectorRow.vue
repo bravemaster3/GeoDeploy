@@ -21,7 +21,7 @@
             class="text-sm font-medium truncate hover:text-primary hover:underline"
             title="Open this layer's page">{{ layer.name }}</RouterLink>
           <button v-if="auth.canEdit" @click="startEdit" title="Rename layer"
-            class="opacity-0 group-hover:opacity-100 text-muted-foreground/60 hover:text-foreground flex-shrink-0 transition-opacity">
+            class="sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground/60 hover:text-foreground flex-shrink-0 transition-opacity">
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
           </button>
         </template>
@@ -56,7 +56,7 @@
     <button v-if="auth.canEdit && layer.storage_backend === 'geoparquet' && layer.status === 'ready'"
       @click="onTile" :disabled="tiling || layer.tile_status === 'tiling'"
       class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-violet-400 disabled:opacity-40"
-      :class="layer.tile_status === 'tiling' ? '' : 'opacity-0 group-hover:opacity-100'"
+      :class="layer.tile_status === 'tiling' ? '' : 'sm:opacity-0 sm:group-hover:opacity-100'"
       :title="tileTitle(layer)"
     >
       <TilesIcon class="w-4 h-4" :class="(tiling || layer.tile_status === 'tiling') ? 'animate-pulse' : ''" />
@@ -67,7 +67,7 @@
     <button v-if="auth.canEdit && layer.storage_backend === 'geoparquet' && (layer.status === 'error' || layer.status === 'processing')"
       @click="onReprocess" :disabled="restarting"
       class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-primary disabled:opacity-40"
-      :class="layer.status === 'error' ? 'text-amber-400' : 'opacity-0 group-hover:opacity-100'"
+      :class="layer.status === 'error' ? 'text-amber-400' : 'sm:opacity-0 sm:group-hover:opacity-100'"
       title="Restart processing (re-convert / re-prepare — no re-upload needed)"
     >
       <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
@@ -76,7 +76,7 @@
     <!-- Share links: the tool-ready URLs (TileJSON / PMTiles / GeoJSON / STAC) for this layer.
          Visible to every role — a viewer consuming the data elsewhere is exactly the use case. -->
     <button v-if="layer.status === 'ready'" @click="showLinks = true"
-      class="p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
+      class="p-1.5 rounded transition-all sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
       title="Share links — use this layer in QGIS, GeoLibre, MapLibre…"
     >
       <LinkIcon class="w-4 h-4" />
@@ -85,7 +85,7 @@
          inside a portal (issue #23). What is saved here is what a portal picks up when the layer is
          added, and what the legend endpoint reports. -->
     <button v-if="auth.canEdit && layer.status === 'ready'" @click="showStyle = true"
-      class="p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
+      class="p-1.5 rounded transition-all sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
       title="Default style — colour, size, classification"
     >
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="18" cy="13" r="2.5"/><circle cx="6.5" cy="10.5" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-1.4-1-1.9-1-3 0-.6.4-1 1-1h2a5 5 0 0 0 5-5c0-5-4.5-9-9-9z"/></svg>
@@ -99,7 +99,7 @@
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
     </button>
     <button v-if="auth.canEdit" @click="$emit('delete')"
-      class="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
+      class="sm:opacity-0 sm:group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
       title="Delete layer"
     >
       <TrashIcon class="w-4 h-4" />
@@ -139,7 +139,7 @@ const sharingBtn = computed(() => {
   const v = props.layer.visibility
   if (v === 'public') return { class: 'text-emerald-400', title: 'Public — in the data catalog; edit sharing & metadata' }
   if (v === 'private') return { class: 'text-amber-400', title: 'Private — only you and admins; change sharing' }
-  return { class: 'opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-sky-400', title: 'Sharing (organization / private / public)' }
+  return { class: 'sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground/70 hover:text-sky-400', title: 'Sharing (organization / private / public)' }
 })
 const dataStore = useDataStore()
 const showSharing = ref(false)

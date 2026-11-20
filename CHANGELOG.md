@@ -28,7 +28,9 @@ The headlines, in more detail below:
   - a label that is empty for some features no longer blanks the map;
   - the update warning only lists work that is really running;
   - login and invite pages explain their errors;
-  - the layer page draws rule-based layers that have labels.
+  - the layer page draws rule-based layers that have labels;
+  - on a phone, My Data's search box and the Users page's roles no longer overlap other content,
+    and row actions are visible without hover.
 - **QGIS plugin 0.7.9** and **CLI 1.7.0** are released alongside.
 
 - **A layer's page can be read, not only looked at.**

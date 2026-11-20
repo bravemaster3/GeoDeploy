@@ -1,12 +1,14 @@
 <template>
   <div class="p-6 lg:p-8">
     <div class="max-w-4xl mx-auto space-y-6">
-      <div class="flex items-center justify-between">
-        <div>
+      <!-- Wraps on a phone: the button keeps its one-line label and moves under the title, rather
+           than squeezing into a two-line block beside it. -->
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="min-w-0">
           <h1 class="text-xl font-bold text-foreground">{{ $t('users.title') }}</h1>
           <p class="text-sm text-muted-foreground mt-0.5">{{ $t('users.subtitle') }}</p>
         </div>
-        <button @click="showInvite = true" class="btn-primary text-sm flex items-center gap-2">
+        <button @click="showInvite = true" class="btn-primary text-sm flex items-center gap-2 whitespace-nowrap">
           <PlusIcon class="w-4 h-4" />
           {{ $t('users.invite') }}
         </button>

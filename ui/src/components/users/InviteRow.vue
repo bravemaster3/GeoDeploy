@@ -1,10 +1,11 @@
 <template>
   <div class="px-4 py-3 hover:bg-muted/60 group">
-    <div class="flex items-center gap-4">
+    <!-- Wraps on a phone, like UserRow: the actions go under the address instead of over it. -->
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
       <div class="w-9 h-9 rounded-full bg-muted text-muted-foreground flex items-center justify-center flex-shrink-0">
         <UsersIcon class="w-4 h-4" />
       </div>
-      <div class="flex-1 min-w-0">
+      <div class="flex-1 min-w-[10rem]">
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-sm font-medium text-foreground truncate">{{ invite.email }}</span>
           <span class="text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0" :class="roleBadge">
@@ -15,7 +16,7 @@
           {{ $t('users.expires') }} {{ expires }}
         </div>
       </div>
-      <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+      <div class="flex items-center gap-1 basis-full sm:basis-auto pl-[3.25rem] sm:pl-0 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0">
         <button @click="onRegenerate" class="btn-secondary text-xs px-2 py-1">{{ $t('users.regenerate') }}</button>
         <button @click="onRevoke" :title="$t('users.revoke')"
           class="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-red-400 hover:bg-muted">

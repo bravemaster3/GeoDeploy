@@ -21,7 +21,7 @@
             class="text-sm font-medium truncate hover:text-primary hover:underline"
             title="Open this layer's page">{{ layer.name }}</RouterLink>
           <button v-if="auth.canEdit" @click="startEdit" title="Rename layer"
-            class="opacity-0 group-hover:opacity-100 text-muted-foreground/60 hover:text-foreground flex-shrink-0 transition-opacity">
+            class="sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground/60 hover:text-foreground flex-shrink-0 transition-opacity">
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
           </button>
         </template>
@@ -41,7 +41,7 @@
     <StatusBadge :status="layer.status" :progress="layer._job?.progress ?? layer.progress" :step="layer._job?.current_step ?? layer.current_step" />
     <!-- Share links: TileJSON / XYZ / /vsicurl/ COG / STAC — every role, consuming isn't editing. -->
     <button v-if="layer.status === 'ready'" @click="showLinks = true"
-      class="p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
+      class="p-1.5 rounded transition-all sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
       title="Share links — use this layer in QGIS, GeoLibre, GDAL…"
     >
       <LinkIcon class="w-4 h-4" />
@@ -49,7 +49,7 @@
     <!-- Style: colormap, stretch, hillshade — the layer's DEFAULT, editable here rather than only
          inside a portal (issue #23). -->
     <button v-if="auth.canEdit && layer.status === 'ready'" @click="showStyle = true"
-      class="p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
+      class="p-1.5 rounded transition-all sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
       title="Default style — colormap and stretch"
     >
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="18" cy="13" r="2.5"/><circle cx="6.5" cy="10.5" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-1.4-1-1.9-1-3 0-.6.4-1 1-1h2a5 5 0 0 0 5-5c0-5-4.5-9-9-9z"/></svg>
@@ -63,7 +63,7 @@
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
     </button>
     <button v-if="auth.canEdit" @click="$emit('delete')"
-      class="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
+      class="sm:opacity-0 sm:group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
     >
       <TrashIcon class="w-4 h-4" />
     </button>
@@ -118,7 +118,7 @@ const sharingBtn = computed(() => {
   const v = props.layer.visibility
   if (v === 'public') return { class: 'text-emerald-400', title: 'Public — in the data catalog; edit sharing & metadata' }
   if (v === 'private') return { class: 'text-amber-400', title: 'Private — only you and admins; change sharing' }
-  return { class: 'opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-sky-400', title: 'Sharing (organization / private / public)' }
+  return { class: 'sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground/70 hover:text-sky-400', title: 'Sharing (organization / private / public)' }
 })
 const formatBytes = (b) => b > 1e9 ? `${(b/1e9).toFixed(1)} GB` : b > 1e6 ? `${(b/1e6).toFixed(1)} MB` : `${(b/1e3).toFixed(0)} KB`
 </script>
