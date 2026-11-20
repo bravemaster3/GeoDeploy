@@ -88,3 +88,8 @@ crossing actually required, checked rather than assumed (2026-08-30):
 
 ## Last updated
 2026-09-03 (added the `qgis-real` matrix job — the plugin's symbology round trip against a real PyQGIS on 3.44 and 4.2)
+
+- **Every job runs on `ubuntu-24.04`, never `ubuntu-latest`** (2026-11-20). `latest` moved to Ubuntu
+  26.04, which has no Python 3.9, and `publish-cli.yml` — the 3.9 floor build — failed `Set up Python`
+  on the `cli-v1.7.0` tag, before anything was built or uploaded. A runner that changes under a
+  release is a release that fails for reasons nobody changed; move the pin deliberately.
